@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+# NOTE: Public Preview API — temporalio.contrib.workflow_streams.
 from temporalio.contrib.workflow_streams import WorkflowStream
 
 

@@ -13,6 +13,7 @@ import uuid
 import pytest
 
 from temporalio.client import Client
+# NOTE: Public Preview API — temporalio.contrib.workflow_streams.
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
