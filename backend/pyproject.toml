@@ -1,0 +1,27 @@
+[project]
+name = "streams-mechanics-demo"
+version = "0.1.0"
+description = "Temporal Workflow Streams mechanics demo (backend: workflow, activity, worker, FastAPI SSE bridge)"
+requires-python = ">=3.11"
+dependencies = [
+    # workflow_streams (Public Preview) landed in the 1.30 line of the Python SDK.
+    "temporalio>=1.30.0",
+    "anthropic>=0.40.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-dotenv>=1.0.0",
+    "sse-starlette>=2.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = ["workflows", "activities", "shared"]

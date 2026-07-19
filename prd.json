@@ -1,0 +1,81 @@
+{
+  "project": "streams-mechanics-demo",
+  "summary": "A deliberately simple Temporal Workflow Streams demo for a technical SA audience. No business storyline. A workflow asks Claude a plain question via a real streaming Anthropic API call, and the demo stages four distinct failure/resume scenarios so the audience sees the actual mechanics, not a narrative.",
+  "stack": {
+    "workflow": "Python SDK, temporalio.contrib.workflow_streams (Public Preview)",
+    "bridge": "FastAPI, SSE from workflow stream to browser, exposes a REST endpoint to fetch buffered history from an offset",
+    "frontend": "Next.js + shadcn/ui, split-pane: left is the live token feed, right is the Python code executing, highlighted line by line",
+    "llm": "Anthropic API, claude-sonnet-4-6, streaming, read ANTHROPIC_API_KEY from env, ship .env.example"
+  },
+  "setup": [
+    "Initialize a new git repo with a sane .gitignore",
+    "Before writing any code, read /mnt/skills/organization/temporal-developer/SKILL.md, then references/python/python.md and references/core/ai-patterns.md from that skill",
+    "Workflow Streams docs: https://docs.temporal.io/develop/python/workflows/workflow-streams",
+    "This is Public Preview, add a comment wherever temporalio.contrib.workflow_streams is imported"
+  ],
+  "critical_rules": [
+    "Construct WorkflowStream() inside @workflow.init, never @workflow.run. The check inspects the immediate caller's frame name and requires it to be __init__. Calling it from @workflow.run, a helper, or a handler raises RuntimeError.",
+    "Type the state you carry across continue-as-new as WorkflowStreamState | None, not Any. This applies specifically to the prior_state parameter threaded through continue-as-new, not to the stream or topics generally. An untyped Any field is silently deserialized as a plain dict by the default data converter, which breaks the next run, this is silent data corruption, not a clean exception.",
+    "Dedup is real but scoped narrowly: publishes are deduplicated by (publisher_id, sequence) only within the SAME publisher instance's retried flush (e.g. a transient signal-send failure retried internally by the client). It does NOT extend across a full Activity-level retry, because a new Activity attempt constructs a new WorkflowStreamClient with a new publisher_id. When an Activity is retried after a crash, the old attempt's already-published events stay on the stream untouched, and the new attempt appends its own sequence on top. Nothing is retracted automatically, the consumer must detect the retry boundary itself and reset its own accumulated state.",
+    "The workflow hosts the stream but does not subscribe to its own stream. Publish from the workflow and its activities. Subscribe only from external clients (the FastAPI bridge).",
+    "Keep max_retry_duration on activities below the stream's publisher_ttl, or a late retry's dedup state may already be dropped."
+  ],
+  "design": {
+    "workflow": "AskWorkflow takes a plain question string, e.g. 'explain how TCP handshakes work'. No business framing, no fictional company, no vendor/risk angle.",
+    "activity": "ask_llm_streaming calls the Anthropic API with streaming enabled and publishes each token delta to a 'tokens' topic on the stream as it arrives, not buffered until the activity returns.",
+    "pacing_hook": "The activity accepts an optional DEMO_PAUSE_AT_TOKEN env var (e.g. 40). When the running token count hits that value, the activity awaits a long sleep before continuing, giving the presenter a wide, reliable window to trigger a kill at a known point instead of eyeballing LLM latency live. This must be clearly commented as demo-only scaffolding, not a production pattern.",
+    "reliability": "Hard per-activity timeout and a graceful fallback event published to the stream if the Anthropic API is slow or errors, so a live demo cannot stall on a flaky network call."
+  },
+  "demo_scenarios": [
+    {
+      "name": "LLM API fails mid-stream",
+      "mechanism": "Force an Anthropic API error mid-response using a DEMO_FORCE_LLM_ERROR_AT_TOKEN env var or a malformed key toggle.",
+      "expected_behavior": "Activity's timeout/fallback path publishes a graceful fallback event to the stream instead of hanging or crashing the workflow."
+    },
+    {
+      "name": "Activity-level retry (worker crash)",
+      "mechanism": "kill-and-restart.sh sends SIGKILL to the worker process while the activity is paused at DEMO_PAUSE_AT_TOKEN.",
+      "expected_behavior": "Temporal detects the dead worker via heartbeat timeout, retries the activity as a new attempt with a new publisher_id. Old partial tokens stay on the stream, the new attempt appends its own sequence. The frontend detects the retry boundary (a distinct marker event) and visually resets/retracts the stale partial output. This is the correct, narrow scope of 'not deduplicated' and should be labeled as such in the UI and talk track."
+    },
+    {
+      "name": "FastAPI bridge crash",
+      "mechanism": "kill-bridge.sh kills the FastAPI process mid-stream, a restart script brings it back.",
+      "expected_behavior": "The restarted bridge re-subscribes to the WorkflowStreamClient starting from the last offset it had polled (tracked via a small persisted offset file or in-memory recovery from the workflow's own offset query), not from zero."
+    },
+    {
+      "name": "Network blip (browser to bridge)",
+      "mechanism": "Bridge exposes a small chaos toggle that drops the SSE connection once, simulating a network interruption between browser and bridge.",
+      "expected_behavior": "The browser's native EventSource auto-reconnects using the Last-Event-ID header, which the bridge honors by resuming from that offset. No gaps, no duplicates, no code needed beyond honoring the header."
+    },
+    {
+      "name": "Browser/client refresh",
+      "mechanism": "Presenter manually refreshes the browser tab mid-stream.",
+      "expected_behavior": "On load, the frontend first calls the bridge's REST endpoint to fetch buffered history up to the current offset, renders it, then attaches the live SSE tail from that offset forward. The task does not restart, the view rehydrates."
+    }
+  ],
+  "frontend": {
+    "layout": "Split-pane UI, same pattern as prior demos",
+    "left_pane": "Live token feed, with a clearly visible RETRY boundary marker when an activity-level retry occurs (stale partial output retracted), and a clean rehydration path on page load",
+    "right_pane": "The actual Python code for whichever step is currently executing, highlighted line by line",
+    "components": "shadcn/ui"
+  },
+  "scripts": {
+    "start-demo.sh": "Starts the Temporal dev server (if needed), the worker, and the bridge",
+    "kill-and-restart.sh": "Kills the worker mid-run to trigger the Activity-level retry scenario",
+    "kill-bridge.sh": "Kills and restarts the FastAPI bridge mid-run to trigger the bridge-crash scenario",
+    "stop-demo.sh": "Tears everything down",
+    "README": "Talk track covering each of the four scenarios distinctly, plus the corrected explanation of the two different kinds of retry and why they look different on screen"
+  },
+  "testing": [
+    "pytest asserting RuntimeError if WorkflowStream() is constructed outside @workflow.init",
+    "pytest or integration test asserting that an activity-level retry (new publisher_id) does NOT dedupe against the prior attempt's events"
+  ],
+  "completion_criteria": [
+    "Repo is initialized with a sane .gitignore",
+    "Worker starts clean",
+    "Frontend renders the split-pane UI",
+    "All four demo scenarios are individually triggerable and visibly distinct on screen",
+    "README documents the corrected two-tier retry/dedup explanation and a talk track for each scenario",
+    "All tests pass"
+  ]
+}
