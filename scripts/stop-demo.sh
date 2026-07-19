@@ -4,20 +4,30 @@
 # 7233 is left alone). Normally you just press Ctrl-C in start-demo.sh instead.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
-stop_pidfile "$RUN_DIR/frontend.pid" TERM
-stop_pidfile "$RUN_DIR/bridge.pid" TERM
-stop_pidfile "$RUN_DIR/worker.pid" TERM
+# temporal.pid only exists if THIS project started it; a reused server has none.
+[[ -f "$RUN_DIR/temporal.pid" ]] \
+  || log "Temporal server was pre-existing (not started by us) — leaving it running."
 
-if [[ -f "$RUN_DIR/temporal.pid" ]]; then
-  stop_pidfile "$RUN_DIR/temporal.pid" TERM
-else
-  log "Temporal server was pre-existing (not started by us) — leaving it running."
-fi
+# Politely first (TERM the whole tree), then escalate to KILL for anything that
+# ignored it, THEN remove the pidfiles. (stop_pidfile deletes the file on the
+# first call, which would defeat a two-pass TERM-then-KILL — so do it directly.)
+SERVICES=(frontend bridge worker temporal)
 
-# Give processes a moment, then hard-kill any stragglers we own.
+for svc in "${SERVICES[@]}"; do
+  f="$RUN_DIR/$svc.pid"; pid_alive "$f" || continue
+  kill_tree "$(cat "$f")" TERM
+  log "sent SIGTERM to $svc tree (pid $(cat "$f"))"
+done
+
 sleep 1
-for f in frontend bridge worker temporal; do
-  [[ -f "$RUN_DIR/$f.pid" ]] && stop_pidfile "$RUN_DIR/$f.pid" KILL
+
+for svc in "${SERVICES[@]}"; do
+  f="$RUN_DIR/$svc.pid"
+  if pid_alive "$f"; then
+    kill_tree "$(cat "$f")" KILL
+    log "escalated to SIGKILL for $svc tree (pid $(cat "$f"))"
+  fi
+  rm -f "$f"
 done
 
 log "Stopped. (Persisted bridge offsets kept in .bridge-offsets/; remove to reset.)"
