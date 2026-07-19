@@ -124,9 +124,11 @@ cp .env.example .env
 
 ### Frontend
 
+`start-demo.sh` runs `npm install` automatically on the first run, so this is
+optional. If you want to point the UI at a non-default bridge port, set it here:
+
 ```bash
 cd frontend
-npm install
 cp .env.local.example .env.local   # NEXT_PUBLIC_BRIDGE_URL, defaults to :8000
 ```
 
@@ -134,18 +136,38 @@ cp .env.local.example .env.local   # NEXT_PUBLIC_BRIDGE_URL, defaults to :8000
 
 ## Running
 
+One command starts **everything** — Temporal dev server (if needed), worker,
+bridge, **and the UI** — and stays in the foreground:
+
 ```bash
-./scripts/start-demo.sh     # temporal dev server (if needed) + worker + bridge
-cd frontend && npm run dev  # http://localhost:3000
+./scripts/start-demo.sh
 ```
 
-Tear down with `./scripts/stop-demo.sh`.
+**Press `Ctrl-C` once to stop everything.** The worker, bridge, and UI (and the
+Temporal dev server, only if this script started it) are all torn down together —
+no separate stop step, so nothing gets left orphaned. A pre-existing Temporal
+server on 7233 is reused and left running.
 
+- UI: http://localhost:3000
 - Temporal UI: http://localhost:8233
 - Bridge health: http://localhost:8000/health
 
-If port 8000 is taken, set `BRIDGE_PORT` (and `NEXT_PUBLIC_BRIDGE_URL`
-correspondingly) before starting.
+`stop-demo.sh` remains as a **safety net** to clean up strays from a previous run
+(e.g. if the terminal was closed without Ctrl-C).
+
+### Ports
+
+Defaults: bridge `8000`, UI `3000`, Temporal `7233`/UI `8233`. `start-demo.sh`
+**fails fast** if the bridge or UI port is already taken (rather than silently
+colliding). To relocate a port:
+
+- **Bridge:** set `BRIDGE_PORT` in `.env` *and* `NEXT_PUBLIC_BRIDGE_URL` in
+  `frontend/.env.local` to match (e.g. `8077` / `http://127.0.0.1:8077`).
+- **UI:** set `FRONTEND_PORT` in `.env`.
+
+> The frontend needs Node ≥ 22.9 (npm 11 rejects 22.8.x). `start-demo.sh`
+> auto-selects a suitable Node on your PATH (e.g. `/usr/local/bin/node`) if the
+> default `node` is too old.
 
 ---
 
@@ -232,21 +254,6 @@ cd backend && .venv/bin/python -m pytest -q
   `token` → `complete` arrive in order over the global offset.
 
 ---
-
-## Layout
-
-```
-backend/
-  workflows/ask_workflow.py   AskWorkflow — hosts the stream (rule 1), orchestrates
-  activities/ask_llm.py       ask_llm_streaming — real streaming call + demo hooks
-  shared/models.py            StreamEvent union, AskInput (typed CAN state, rule 2)
-  shared/config.py            env-derived config + demo-only knobs
-  worker.py                   registers workflow + activity
-  bridge.py                   FastAPI: /ask /history /stream /offset /chaos /source
-  tests/                      the three tests above
-frontend/                     Next.js + shadcn/ui split-pane UI
-scripts/                      start-demo / kill-and-restart / kill-bridge / stop-demo
-```
 
 ## Demo-only scaffolding
 
