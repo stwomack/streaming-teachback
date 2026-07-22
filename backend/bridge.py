@@ -61,9 +61,15 @@ app.add_middleware(
 # Set once at startup.
 _client: Client | None = None
 
-# Scenario 4: when armed, the next SSE connection drops after forwarding one
-# event, simulating a single network interruption. The browser auto-reconnects.
+# Scenario 4: when armed, the next SSE connection drops after forwarding
+# CHAOS_DROP_AFTER events, simulating a single network interruption partway
+# through the stream. The browser auto-reconnects.
 _chaos_drop_armed = False
+
+# How many events to forward on the armed connection before dropping it. Dropping
+# a few events in (rather than on the first) makes the blip land visibly *inside*
+# the answer during a demo instead of at the opening `start` event.
+CHAOS_DROP_AFTER = 8
 
 
 def temporal() -> Client:
@@ -215,6 +221,7 @@ async def stream(workflow_id: str, request: Request, from_offset: int = -1):
         # generator itself; a second consumer of receive() races it and can drop
         # events spuriously. Client disconnect surfaces as GeneratorExit /
         # CancelledError, which contextlib.aclosing propagates into subscribe().
+        forwarded = 0
         agen = topic.subscribe(from_offset=start)
         async with contextlib.aclosing(agen):
             async for item in agen:
@@ -228,11 +235,12 @@ async def stream(workflow_id: str, request: Request, from_offset: int = -1):
                     "data": json.dumps(payload),
                 }
                 _persist_offset(workflow_id, item.offset)
+                forwarded += 1
 
-                if drop_this_connection:
-                    # Scenario 4: simulate a network blip by closing after one
-                    # event. EventSource reconnects automatically and resumes
-                    # from Last-Event-ID — no gaps, no duplicates.
+                if drop_this_connection and forwarded >= CHAOS_DROP_AFTER:
+                    # Scenario 4: simulate a network blip by closing a few events
+                    # into the stream. EventSource reconnects automatically and
+                    # resumes from Last-Event-ID — no gaps, no duplicates.
                     break
 
     return EventSourceResponse(gen())

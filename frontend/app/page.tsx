@@ -45,7 +45,7 @@ const PHASE_CODE: Record<
 };
 
 export default function Page() {
-  const [question, setQuestion] = useState("explain how TCP handshakes work");
+  const [question, setQuestion] = useState("Teach me everything I need to know about the late bronze age collapse in 1000 words or more. Don't stop until the report is done");
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [phase, setPhase] = useState<EventKind | "idle">("idle");

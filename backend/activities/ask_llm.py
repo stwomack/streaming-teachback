@@ -160,7 +160,7 @@ async def _stream_completion(question: str, attempt: int, emit) -> str:
 
     async with llm.messages.stream(
         model=config.ANTHROPIC_MODEL,
-        max_tokens=1024,
+        max_tokens=4096,
         messages=[{"role": "user", "content": question}],
     ) as stream:
         async for text in stream.text_stream:
@@ -174,6 +174,18 @@ async def _stream_completion(question: str, attempt: int, emit) -> str:
 
             await _maybe_force_error(token_count)
             await _maybe_pause(token_count, attempt)
+
+        # Why did the stream end? `end_turn` = the model finished on its own;
+        # `max_tokens` = it hit the `max_tokens` ceiling and was cut off. Logged
+        # so a too-short answer can be diagnosed (raise max_tokens vs. push the
+        # prompt) without guessing.
+        final = await stream.get_final_message()
+        activity.logger.info(
+            "LLM stream ended: stop_reason=%s tokens=%s output_tokens=%s",
+            final.stop_reason,
+            token_count,
+            final.usage.output_tokens,
+        )
 
     return "".join(pieces)
 

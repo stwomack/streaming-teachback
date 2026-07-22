@@ -68,7 +68,7 @@ class AskWorkflow:
                 # >1 so the worker-crash retry actually happens. The forced-error
                 # scenario does NOT consume attempts: it is caught inside the
                 # activity and returns success.
-                maximum_attempts=5,
+                maximum_attempts=500,
             ),
         )
 
