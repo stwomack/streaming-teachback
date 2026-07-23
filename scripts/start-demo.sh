@@ -81,11 +81,12 @@ echo "   UI          : http://localhost:$FRONTEND_PORT"
 echo "   Temporal UI : http://localhost:$TEMPORAL_UI_PORT"
 echo "   Bridge      : http://$BRIDGE_HOST:$BRIDGE_PORT  (health: /health)"
 echo
-echo "   Scenario 1 (LLM error) : set DEMO_FORCE_LLM_ERROR_AT_TOKEN in .env, restart"
-echo "   Scenario 2 (worker crash): set DEMO_PAUSE_AT_TOKEN in .env; ./scripts/kill-and-restart.sh"
-echo "   Scenario 3 (bridge crash): ./scripts/kill-bridge.sh"
-echo "   Scenario 4 (network blip): click 'Arm network blip' in the UI"
-echo "   Scenario 5 (refresh)     : refresh the browser tab mid-stream"
+echo "   Scenario 1 (LLM error)     : set DEMO_FORCE_LLM_ERROR_AT_TOKEN in .env, restart the worker"
+echo "   Scenario 2 (activity retry): click 'Ask with simulated failure' in the UI (no env, no kill)"
+echo "                                or for real: set DEMO_PAUSE_AT_TOKEN in .env; ./scripts/kill-and-restart.sh"
+echo "   Scenario 3 (bridge crash)  : ./scripts/kill-bridge.sh"
+echo "   Scenario 4 (network blip)  : click 'Arm network blip' in the UI"
+echo "   Scenario 5 (refresh)       : refresh the browser tab mid-stream"
 echo
 log "Press Ctrl-C to stop EVERYTHING (worker, bridge, UI$([[ $STARTED_TEMPORAL == 1 ]] && echo ', temporal'))."
 

@@ -47,9 +47,27 @@ BATCH_INTERVAL = __import__("datetime").timedelta(milliseconds=200)
 # retention window is treated as a fresh publish and can land twice. 5 min < 15.
 MAX_RETRY_DURATION = __import__("datetime").timedelta(minutes=5)
 
+# Stream-chunk index at which the "Ask with simulated failure" button forces a
+# retry. NOTE: this counts iterations of `stream.text_stream`, i.e. SDK text
+# *chunks*, NOT model tokens — each chunk averages ~15 output tokens. So chunk 20
+# ≈ ~300 output tokens ≈ ~225 words: a mid-length answer reaches it cleanly,
+# giving a visible pre-retry partial without a long response bloating the event
+# history. Lower it for terser prompts, raise it for long ones.
+SIMULATED_FAILURE_AT_TOKEN = 20
+
 
 class _SimulatedLLMError(RuntimeError):
     """Raised by the DEMO_FORCE_LLM_ERROR_AT_TOKEN hook. Demo-only."""
+
+
+class _SimulatedActivityFailure(RuntimeError):
+    """Raised by the "Ask with simulated failure" button (scenario 2). Demo-only.
+
+    Deliberately NOT caught by the graceful-fallback handlers below, so it
+    propagates out of the activity and Temporal retries it as a NEW attempt with
+    a NEW publisher_id — the Tier 2 boundary — without anyone killing the worker.
+    Contrast _SimulatedLLMError, which IS caught and degrades without a retry.
+    """
 
 
 @activity.defn
@@ -81,55 +99,81 @@ async def ask_llm_streaming(input: AskLLMInput) -> str:
     async with client:
         events = client.topic(EVENTS_TOPIC, type=StreamEvent)
 
-        def emit(evt: StreamEvent, *, flush: bool = False) -> None:
+        # Stamp every event with the attempt + publisher_id that produced it, so
+        # the UI can watch those values change across the retry boundary. This is
+        # metadata only: the actual SDK call — `events.publish(...)` — is written
+        # out at each call site below rather than hidden behind a helper, so the
+        # publish surface is visible in the demo's code pane.
+        def stamp(evt: StreamEvent) -> StreamEvent:
             evt.attempt = attempt
             evt.publisher_id = publisher_id
-            events.publish(evt, force_flush=flush)
+            return evt
 
         # ── Retry boundary marker ────────────────────────────────────────────
         # On any attempt after the first, announce the retry FIRST (force_flush
         # so the UI reacts immediately). The consumer treats this as a hard
         # reset: retract/annotate the stale partial output from the dead attempt.
         if attempt > 1:
-            emit(
-                StreamEvent(
-                    kind=KIND_RETRY,
-                    detail=(
-                        f"Activity retry: attempt {attempt} started with a new "
-                        f"publisher_id. The previous attempt's partial tokens are "
-                        f"stale and are being retracted."
-                    ),
+            events.publish(
+                stamp(
+                    StreamEvent(
+                        kind=KIND_RETRY,
+                        detail=(
+                            f"Activity retry: attempt {attempt} started with a new "
+                            f"publisher_id. The previous attempt's partial tokens are "
+                            f"stale and are being retracted."
+                        ),
+                    )
                 ),
-                flush=True,
+                force_flush=True,
             )
 
-        emit(
-            StreamEvent(
-                kind=KIND_START,
-                detail=f"attempt {attempt} · publisher {publisher_id}",
+        events.publish(
+            stamp(
+                StreamEvent(
+                    kind=KIND_START,
+                    detail=f"attempt {attempt} · publisher {publisher_id}",
+                )
             ),
-            flush=True,
+            force_flush=True,
         )
 
         try:
-            text = await _stream_completion(input.question, attempt, emit)
+            text = await _stream_completion(
+                input.question, attempt, events, stamp, input.simulate_failure
+            )
             accumulated.append(text)
-            emit(StreamEvent(kind=KIND_COMPLETE, detail="response complete"), flush=True)
+            events.publish(
+                stamp(StreamEvent(kind=KIND_COMPLETE, detail="response complete")),
+                force_flush=True,
+            )
         except _SimulatedLLMError as e:
             # Scenario 1: forced mid-stream API failure. Degrade gracefully — do
             # NOT crash the workflow and do NOT trigger an activity retry.
             fallback = _fallback_text(str(e))
             accumulated.append(fallback)
-            emit(StreamEvent(kind=KIND_FALLBACK, text=fallback, detail=str(e)), flush=True)
-            emit(StreamEvent(kind=KIND_COMPLETE, detail="completed via fallback"), flush=True)
+            events.publish(
+                stamp(StreamEvent(kind=KIND_FALLBACK, text=fallback, detail=str(e))),
+                force_flush=True,
+            )
+            events.publish(
+                stamp(StreamEvent(kind=KIND_COMPLETE, detail="completed via fallback")),
+                force_flush=True,
+            )
         except (anthropic.APIError, asyncio.TimeoutError) as e:
             # Real slow/errored network call → same graceful degradation, so a
             # live demo can never hang on a flaky Anthropic call.
             reason = f"{type(e).__name__}: {e}"
             fallback = _fallback_text(reason)
             accumulated.append(fallback)
-            emit(StreamEvent(kind=KIND_FALLBACK, text=fallback, detail=reason), flush=True)
-            emit(StreamEvent(kind=KIND_COMPLETE, detail="completed via fallback"), flush=True)
+            events.publish(
+                stamp(StreamEvent(kind=KIND_FALLBACK, text=fallback, detail=reason)),
+                force_flush=True,
+            )
+            events.publish(
+                stamp(StreamEvent(kind=KIND_COMPLETE, detail="completed via fallback")),
+                force_flush=True,
+            )
 
         # Ensure everything buffered is on the server before we return. Exiting
         # the `async with` also flushes, but an explicit barrier makes the intent
@@ -139,7 +183,9 @@ async def ask_llm_streaming(input: AskLLMInput) -> str:
     return "".join(accumulated)
 
 
-async def _stream_completion(question: str, attempt: int, emit) -> str:
+async def _stream_completion(
+    question: str, attempt: int, events, stamp, simulate_failure: bool
+) -> str:
     """Open a streaming Anthropic response and publish each text delta.
 
     A stalled/slow connection degrades rather than hangs: the Anthropic client's
@@ -167,13 +213,14 @@ async def _stream_completion(question: str, attempt: int, emit) -> str:
             token_count += 1
             pieces.append(text)
 
-            emit(StreamEvent(kind=KIND_TOKEN, seq=token_count, text=text))
+            events.publish(stamp(StreamEvent(kind=KIND_TOKEN, seq=token_count, text=text)))
             # Heartbeat every token so a dead worker is detected within the
             # heartbeat_timeout window (drives the retry scenario).
             activity.heartbeat({"attempt": attempt, "tokens": token_count})
 
             await _maybe_force_error(token_count)
             await _maybe_pause(token_count, attempt)
+            _maybe_simulate_activity_failure(token_count, attempt, simulate_failure)
 
         # Why did the stream end? `end_turn` = the model finished on its own;
         # `max_tokens` = it hit the `max_tokens` ceiling and was cut off. Logged
@@ -188,6 +235,24 @@ async def _stream_completion(question: str, attempt: int, emit) -> str:
         )
 
     return "".join(pieces)
+
+
+def _maybe_simulate_activity_failure(
+    token_count: int, attempt: int, simulate_failure: bool
+) -> None:
+    """DEMO-ONLY (scenario 2, from the UI): raise an UNCAUGHT retryable failure.
+
+    Fires once — on attempt 1, at a fixed token — when the request came from the
+    "Ask with simulated failure" button. Because it is not caught, the activity
+    fails and Temporal retries it as attempt 2 (a new publisher_id), which then
+    streams through cleanly. This reproduces the worker-crash Tier 2 boundary
+    without the swivel-chair (no SIGKILL, no env change, no restart).
+    """
+    if simulate_failure and attempt == 1 and token_count == SIMULATED_FAILURE_AT_TOKEN:
+        raise _SimulatedActivityFailure(
+            f"Simulated activity failure at token {token_count} (attempt {attempt}); "
+            f"Temporal will retry as a new attempt → new publisher → RETRY boundary."
+        )
 
 
 async def _maybe_force_error(token_count: int) -> None:

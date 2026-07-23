@@ -188,19 +188,33 @@ live demo can't stall on a flaky network call." On screen: tokens stream, then a
 fallback message appears, then `complete`. **One** attempt — no retry, because the
 activity handled the error itself.
 
-### 2 — Activity-level retry (worker crash) → new publisher, RETRY boundary
+### 2 — Activity-level retry → new publisher, RETRY boundary
 
-**Trigger:** set `DEMO_PAUSE_AT_TOKEN=40` in `.env`, restart the worker, ask a
-question. When it parks at token 40, run `./scripts/kill-and-restart.sh`.
+**Trigger (from the UI — no swivel-chair):** click **Ask with simulated failure**.
+The activity raises an *uncaught, retryable* error once, early in the stream on
+attempt 1, so Temporal retries it as attempt 2 with a new `publisher_id`. No worker
+kill, no `.env` change, no restart. (The exact cut point is
+`SIMULATED_FAILURE_AT_TOKEN` in `activities/ask_llm.py` — a `stream.text_stream`
+*chunk* index, ~15 output tokens each, tuned low so a short answer still triggers.)
 
-**What to say:** "I'm SIGKILLing the worker mid-activity. Temporal detects the
-dead worker via **heartbeat timeout** and retries the activity as a **new
-attempt** — which builds a **new `publisher_id`**. This is Tier 2: the old
-attempt's partial tokens are **not** deduplicated away, they stay on the stream.
-The new attempt publishes a `RETRY` marker and its own sequence. The UI detects
-that boundary, **retracts** the stale partial output, and shows the new attempt.
-Watch the `publisher_id` in the left pane change across the boundary." This is the
-correct, narrow scope of "not deduplicated," and it's labeled as such on screen.
+**Trigger (the real worker crash, if you want to show it "for real"):** set
+`DEMO_PAUSE_AT_TOKEN=40` in `.env`, restart the worker, ask a question, and when it
+parks at token 40 run `./scripts/kill-and-restart.sh`. Here the retry is driven by
+a **heartbeat timeout** detecting the dead worker, rather than a raised error — but
+the stream-level result is identical.
+
+**What to say:** "The activity is retried as a **new attempt**, which builds a
+**new `publisher_id`**. This is Tier 2: the old attempt's partial tokens are
+**not** deduplicated away, they stay on the stream. The new attempt publishes a
+`RETRY` marker and its own sequence. The UI detects that boundary, **retracts**
+the stale partial output, and shows the new attempt. Watch the `publisher_id` in
+the left pane change across the boundary." This is the correct, narrow scope of
+"not deduplicated," and it's labeled as such on screen.
+
+> Contrast with scenario 1: that forced error is **caught inside** the activity →
+> graceful fallback, **no retry**. This button's error is **uncaught** → a real
+> activity retry. Same token, opposite handling — the difference between "degrade"
+> and "retry" is exactly which errors the activity swallows.
 
 ### 3 — FastAPI bridge crash → resume from persisted offset
 
@@ -261,3 +275,12 @@ cd backend && .venv/bin/python -m pytest -q
 exist **only** to stage scenarios reliably in front of an audience. They are
 clearly commented as such in `activities/ask_llm.py` and are **not** production
 patterns. Leave them unset for a normal run.
+
+The **Ask with simulated failure** button (scenario 2) is the same kind of
+scaffolding, driven per-request instead of by env: it sets a `simulate_failure`
+flag on the ask, which makes the activity raise an uncaught, retryable error once
+(attempt 1, at `SIMULATED_FAILURE_AT_TOKEN`) to force a real activity retry
+without a worker kill. The flag threads `AskInput` → `AskLLMInput` → the activity,
+and the trigger (`_maybe_simulate_activity_failure` / `_SimulatedActivityFailure`)
+is commented as demo-only in `activities/ask_llm.py`. A plain **Ask** leaves the
+flag `False`.

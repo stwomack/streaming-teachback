@@ -3,11 +3,14 @@ import type { SourceResponse } from "./types";
 export const BRIDGE_URL =
   process.env.NEXT_PUBLIC_BRIDGE_URL ?? "http://127.0.0.1:8000";
 
-export async function askQuestion(question: string): Promise<string> {
+export async function askQuestion(
+  question: string,
+  simulateFailure = false
+): Promise<string> {
   const res = await fetch(`${BRIDGE_URL}/ask`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, simulate_failure: simulateFailure }),
   });
   if (!res.ok) throw new Error(`ask failed: ${res.status}`);
   const data = await res.json();

@@ -113,6 +113,7 @@ def _persist_offset(workflow_id: str, offset: int) -> None:
 # ── models ──────────────────────────────────────────────────────────────────
 class AskBody(BaseModel):
     question: str
+    simulate_failure: bool = False
 
 
 def _event_payload(offset: int, event: Any) -> dict:
@@ -135,7 +136,7 @@ async def ask(body: AskBody) -> JSONResponse:
 
     await temporal().start_workflow(
         AskWorkflow.run,
-        AskInput(question=body.question),
+        AskInput(question=body.question, simulate_failure=body.simulate_failure),
         id=workflow_id,
         task_queue=config.TASK_QUEUE,
     )

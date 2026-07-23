@@ -74,6 +74,10 @@ class AskInput:
     """
 
     question: str
+    # DEMO-ONLY: when True, the activity raises an uncaught, retryable error once
+    # (on attempt 1) to force a real Tier 2 activity retry straight from the UI —
+    # no worker kill, no env change. See activities/ask_llm.py.
+    simulate_failure: bool = False
     stream_state: WorkflowStreamState | None = None
 
 
@@ -84,3 +88,5 @@ class AskLLMInput:
     question: str
     # Threaded explicitly so the activity can address the host workflow's stream.
     workflow_id: str
+    # DEMO-ONLY: force a single Tier 2 activity retry (see ask_llm.py).
+    simulate_failure: bool = False

@@ -128,16 +128,19 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onAsk = useCallback(async () => {
-    closeStream();
-    setSegments([]);
-    setPhase("idle");
-    setLastOffset(null);
-    const wf = await askQuestion(question);
-    setWorkflowId(wf);
-    window.localStorage.setItem(LS_KEY, wf);
-    openStream(wf, 0);
-  }, [question, openStream, closeStream]);
+  const onAsk = useCallback(
+    async (simulateFailure = false) => {
+      closeStream();
+      setSegments([]);
+      setPhase("idle");
+      setLastOffset(null);
+      const wf = await askQuestion(question, simulateFailure);
+      setWorkflowId(wf);
+      window.localStorage.setItem(LS_KEY, wf);
+      openStream(wf, 0);
+    },
+    [question, openStream, closeStream]
+  );
 
   const codeCfg = PHASE_CODE[phase] ?? PHASE_CODE.idle;
 
@@ -243,7 +246,7 @@ function ControlBar({
 }: {
   question: string;
   setQuestion: (q: string) => void;
-  onAsk: () => void;
+  onAsk: (simulateFailure?: boolean) => void;
   disabled: boolean;
 }) {
   const [blipArmed, setBlipArmed] = useState(false);
@@ -254,10 +257,18 @@ function ControlBar({
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         placeholder="Ask a plain question…"
-        onKeyDown={(e) => e.key === "Enter" && !disabled && onAsk()}
+        onKeyDown={(e) => e.key === "Enter" && !disabled && onAsk(false)}
       />
-      <Button onClick={onAsk} disabled={disabled}>
+      <Button onClick={() => onAsk(false)} disabled={disabled}>
         Ask
+      </Button>
+      <Button
+        variant="outline"
+        onClick={() => onAsk(true)}
+        disabled={disabled}
+        title="Scenario 2: force a real activity-level retry early in the stream — new publisher, RETRY boundary, retraction — without killing the worker"
+      >
+        Ask with simulated failure
       </Button>
       <Button
         variant="outline"
@@ -271,7 +282,7 @@ function ControlBar({
         {blipArmed ? "Blip armed ✓" : "Arm network blip"}
       </Button>
       <span className="text-xs text-muted-foreground">
-        Scenarios 2 & 3 via scripts · Scenario 5: refresh this tab
+        Scenario 3 via script · Scenario 5: refresh this tab
       </span>
     </div>
   );

@@ -54,7 +54,11 @@ class AskWorkflow:
         # even when the stream carries a dead attempt's partial tokens.
         answer = await workflow.execute_activity(
             ask_llm_streaming,
-            AskLLMInput(question=input.question, workflow_id=workflow.info().workflow_id),
+            AskLLMInput(
+                question=input.question,
+                workflow_id=workflow.info().workflow_id,
+                simulate_failure=input.simulate_failure,
+            ),
             # Hard per-activity ceiling. Generous so the DEMO_PAUSE window and a
             # real completion both fit; the graceful fallback handles slowness
             # well before this fires.
